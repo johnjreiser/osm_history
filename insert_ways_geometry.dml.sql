@@ -1,4 +1,4 @@
-explain
+-- explain (analyze, buffers, verbose, costs, timing)
 with selected_records as ( -- select a subset of records
     select ow.id 
       from osm_ways ow
@@ -17,7 +17,8 @@ select id
 , tags
 , st_setsrid  (
     CASE
-      WHEN sq.nodes[1] = sq.nodes[CARDINALITY(sq.nodes)] THEN st_makepolygon (ST_AddPoint (st_makeline (st_makepoint (sq.lon, sq.lat)), st_startpoint (st_makeline (st_makepoint (sq.lon, sq.lat)))))
+      WHEN sq.nodes[1] = sq.nodes[CARDINALITY(sq.nodes)] and cardinality(sq.nodes) >= 4 
+      THEN st_makepolygon (ST_AddPoint (st_makeline (st_makepoint (sq.lon, sq.lat)), st_startpoint (st_makeline (st_makepoint (sq.lon, sq.lat)))))
       ELSE st_makeline (st_makepoint (sq.lon, sq.lat))
     END
   , 4326
@@ -36,34 +37,28 @@ FROM
     , n.lat
     FROM
       osm_ways w
-      JOIN selected_records ON selected_records.id = w.id
-      CROSS JOIN LATERAL UNNEST(w.nodes)
-    WITH
-      ORDINALITY AS u (node, node_order)
+      JOIN selected_records sr on w.id = sr.id 
+      JOIN rel_way_node rwn on w.id = rwn.way_id and w.version = rwn.way_version 
+      -- JOIN osm_nodes n ON n.id = rwn.node_id and n.TIMESTAMP <= w.timestamp
       LEFT JOIN LATERAL (
-        SELECT
+        SELECT DISTINCT ON (n.id)
           id
         , TIMESTAMP
         , lon
         , lat
         , VERSION
-        , ROW_NUMBER() OVER (
-            PARTITION BY
-              id
-            ORDER BY
-              VERSION DESC
-          ) rn
         FROM
-          osm_nodes -- order by u.node_order
+          osm_nodes n
         WHERE
-          TIMESTAMP <= w.timestamp
-      ) n ON n.id = u.node
-      AND n.rn = 1
-      -- and n.changeset = w.changeset 
+          n.id = rwn.node_id and 
+          n.TIMESTAMP <= w.timestamp
+        ORDER BY 
+          n.id, n.version DESC 
+      ) n ON TRUE -- filter is pushed inside lateral join
     ORDER BY
-      id
-    , "version"
-    , node_order
+      w.id
+    , w."version"
+    , rwn.way_node_order
   ) sq
 GROUP BY
   id
